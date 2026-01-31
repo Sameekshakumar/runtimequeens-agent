@@ -1,2 +1,11 @@
+# Python junk
+__pycache__/
+*.pyc
+
+# Runtime artifacts
+runtime_repo/
+agent_output.json
+
+# Secrets
 .env
 DEMO_COMMANDS.txt

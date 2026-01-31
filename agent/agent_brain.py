@@ -1,9 +1,3 @@
-
-"""
-RuntimeQueens Agent Brain
-Reasoning-only agent (Hackathon-Optimal)
-"""
-
 import os
 import json
 import re
@@ -16,24 +10,13 @@ try:
 except ImportError:
     GEMINI_AVAILABLE = False
 
-
-# -------------------------------------------------
-# ENV SETUP
-# -------------------------------------------------
-
 load_dotenv()
-
 API_KEY = os.getenv("GEMINI_API_KEY")
 
-
-# -------------------------------------------------
-# AGENT
-# -------------------------------------------------
 
 class BugAnalysisAgent:
     def __init__(self):
         print("🔧 Initializing RuntimeQueens Agent Brain...")
-
         self.model = None
 
         if GEMINI_AVAILABLE and API_KEY:
@@ -46,30 +29,23 @@ class BugAnalysisAgent:
         else:
             print("⚠️ Gemini unavailable → fallback mode")
 
-    # ---------------------------------------------
-
     def analyze_issue(self, issue_text):
-        print("\n" + "=" * 70)
-        print("🤖 RUNTIMEQUEENS – AGENT REASONING")
-        print("=" * 70)
-
-        print("\n🔍 Issue Summary:")
-        print(issue_text.strip())
-
+        print("\n🤖 AGENT REASONING STARTED\n")
         reasoning = self._reason(issue_text)
         self._display(reasoning)
-        self._save(reasoning)
 
+        with open("agent_output.json", "w") as f:
+            json.dump(reasoning, f, indent=2)
+
+        print("\n💾 agent_output.json saved")
         return reasoning
-
-    # ---------------------------------------------
 
     def _reason(self, issue_text):
         if self.model:
             try:
                 return self._call_gemini(issue_text)
             except Exception as e:
-                print(f"⚠️ Gemini error: {e}")
+                print("⚠️ Gemini error:", e)
 
         return self._fallback(issue_text)
 
@@ -90,70 +66,38 @@ test_command
 environment_hints
 fix_strategy
 priority
+recommended_action
 """
 
         response = self.model.generate_content(prompt)
         text = response.text.strip()
 
-        match = re.search(r"\{.*\}", text, re.DOTALL)
+        match = re.search(r"\{{.*\}}", text, re.DOTALL)
         if not match:
             raise ValueError("Invalid Gemini output")
 
         return json.loads(match.group())
 
-    # ---------------------------------------------
-
     def _fallback(self, issue_text):
-        lower = issue_text.lower()
-        test_cmd = "pytest" if "test" in lower else "python main.py"
-
         return {
-            "bug_summary": "Likely missing dependency causing runtime failure",
+            "bug_summary": "Tests fail due to missing dependency in clean environment",
             "bug_type": "dependency_issue",
-            "root_cause_hypothesis": "Required package not installed",
-            "files_to_inspect": ["requirements.txt", "README.md"],
+            "root_cause_hypothesis": "Dependency installed locally but missing in clean env",
+            "files_to_inspect": ["requirements.txt", "setup.py", "README.md"],
             "reproduction_plan": [
-                "Install dependencies",
-                "Run test command in clean environment"
+                "Run tests in clean container"
             ],
-            "test_command": test_cmd,
-            "environment_hints": "Python 3.x, clean virtual environment",
+            "test_command": "pytest",
+            "environment_hints": "Python 3.x, no extra packages",
             "fix_strategy": "Add missing dependency to requirements.txt",
-            "priority": "HIGH"
+            "priority": "HIGH",
+            "recommended_action": "dependency_fix"
         }
 
-    # ---------------------------------------------
-
     def _display(self, r):
-        print("\n🧠 Agent Reasoning:")
-        print("-" * 60)
+        print("-" * 70)
         print("Bug Type:", r["bug_type"])
         print("Priority:", r["priority"])
         print("Summary:", r["bug_summary"])
-        print("\nFiles to inspect:")
-        for f in r["files_to_inspect"]:
-            print(" •", f)
-        print("\nTest Command:", r["test_command"])
         print("Fix Strategy:", r["fix_strategy"])
-        print("-" * 60)
-
-    def _save(self, data):
-        with open("agent_output.json", "w") as f:
-            json.dump(data, f, indent=2)
-        print("\n💾 agent_output.json saved")
-
-
-# -------------------------------------------------
-# DEMO
-# -------------------------------------------------
-
-if __name__ == "__main__":
-    issue_text = """
-Tests fail on fresh installation
-
-Error:
-ModuleNotFoundError: No module named 'flask'
-"""
-
-    agent = BugAnalysisAgent()
-    agent.analyze_issue(issue_text)
+        print("-" * 70)
