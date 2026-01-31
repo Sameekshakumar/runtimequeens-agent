@@ -2,13 +2,7 @@ import os
 import json
 import re
 from dotenv import load_dotenv
-
-# Optional Gemini import
-try:
-    import google.generativeai as genai
-    GEMINI_AVAILABLE = True
-except ImportError:
-    GEMINI_AVAILABLE = False
+from google import genai
 
 load_dotenv()
 API_KEY = os.getenv("GEMINI_API_KEY")
@@ -17,87 +11,113 @@ API_KEY = os.getenv("GEMINI_API_KEY")
 class BugAnalysisAgent:
     def __init__(self):
         print("🔧 Initializing RuntimeQueens Agent Brain...")
-        self.model = None
+        self.client = None
 
-        if GEMINI_AVAILABLE and API_KEY:
+        if not API_KEY:
+            print("⚠️ GEMINI_API_KEY not set → fallback mode")
+            return
+
+        try:
+            self.client = genai.Client(api_key=API_KEY)
+            print("✅ Gemini connected (google.genai)")
+        except Exception as e:
+            print("⚠️ Gemini init failed:", e)
+
+    # --------------------------------------------------
+
+    def analyze_logs(self, logs: str):
+        if self.client:
             try:
-                genai.configure(api_key=API_KEY)
-                self.model = genai.GenerativeModel("gemini-1.5-flash")
-                print("✅ Gemini connected")
+                return self._ai_reason(logs)
             except Exception as e:
-                print(f"⚠️ Gemini init failed: {e}")
-        else:
-            print("⚠️ Gemini unavailable → fallback mode")
+                print("⚠️ Gemini reasoning failed:", e)
 
-    def analyze_issue(self, issue_text):
-        print("\n🤖 AGENT REASONING STARTED\n")
-        reasoning = self._reason(issue_text)
-        self._display(reasoning)
+        return self._fallback_reason(logs)
 
-        with open("agent_output.json", "w") as f:
-            json.dump(reasoning, f, indent=2)
+    # --------------------------------------------------
 
-        print("\n💾 agent_output.json saved")
-        return reasoning
-
-    def _reason(self, issue_text):
-        if self.model:
-            try:
-                return self._call_gemini(issue_text)
-            except Exception as e:
-                print("⚠️ Gemini error:", e)
-
-        return self._fallback(issue_text)
-
-    def _call_gemini(self, issue_text):
+    def _ai_reason(self, logs: str):
         prompt = f"""
-Analyze this GitHub issue and return ONLY valid JSON.
+You are a senior software reliability engineer.
 
-Issue:
-{issue_text}
-
-Required JSON fields:
-bug_summary
+Analyze the execution logs and return ONLY valid JSON with these fields:
 bug_type
-root_cause_hypothesis
-files_to_inspect
-reproduction_plan
-test_command
-environment_hints
-fix_strategy
-priority
+summary
+root_cause
+human_explanation
+confidence
 recommended_action
+
+Execution logs:
+{logs}
 """
 
-        response = self.model.generate_content(prompt)
-        text = response.text.strip()
+        response = self.client.models.generate_content(
+            model="gemini-1.5-flash",
+            contents=prompt
+        )
 
+        text = response.text.strip()
         match = re.search(r"\{{.*\}}", text, re.DOTALL)
+
         if not match:
             raise ValueError("Invalid Gemini output")
 
         return json.loads(match.group())
 
-    def _fallback(self, issue_text):
-        return {
-            "bug_summary": "Tests fail due to missing dependency in clean environment",
-            "bug_type": "dependency_issue",
-            "root_cause_hypothesis": "Dependency installed locally but missing in clean env",
-            "files_to_inspect": ["requirements.txt", "setup.py", "README.md"],
-            "reproduction_plan": [
-                "Run tests in clean container"
-            ],
-            "test_command": "pytest",
-            "environment_hints": "Python 3.x, no extra packages",
-            "fix_strategy": "Add missing dependency to requirements.txt",
-            "priority": "HIGH",
-            "recommended_action": "dependency_fix"
-        }
+    # --------------------------------------------------
 
-    def _display(self, r):
-        print("-" * 70)
-        print("Bug Type:", r["bug_type"])
-        print("Priority:", r["priority"])
-        print("Summary:", r["bug_summary"])
-        print("Fix Strategy:", r["fix_strategy"])
-        print("-" * 70)
+    def _fallback_reason(self, logs: str):
+        logs_lower = logs.lower()
+
+        if "no tests ran" in logs_lower or "collected 0 items" in logs_lower:
+            return {
+                "bug_type": "no_tests_detected",
+                "summary": "No tests were found in the repository",
+                "root_cause": "Repository is documentation or example-based",
+                "human_explanation": (
+                    "This project does not define automated tests, "
+                    "so there is nothing to verify in a clean environment."
+                ),
+                "confidence": 0.95,
+                "recommended_action": "skip_verification"
+            }
+
+        if "modulenotfounderror" in logs_lower:
+            return {
+                "bug_type": "packaging_or_dependency_issue",
+                "summary": "Tests failed due to missing module",
+                "root_cause": "Local package is not installable in a clean environment",
+                "human_explanation": (
+                    "The tests assume a local module is available, "
+                    "but the project is not packaged or installed correctly. "
+                    "This works locally but fails in clean environments."
+                ),
+                "confidence": 0.9,
+                "recommended_action": "make_package_installable"
+            }
+
+        if "failed" in logs_lower or "assert" in logs_lower:
+            return {
+                "bug_type": "test_failure",
+                "summary": "One or more tests failed",
+                "root_cause": "Bug detected by failing assertions",
+                "human_explanation": (
+                    "The tests executed successfully but reported failures, "
+                    "indicating incorrect logic or unexpected behavior in the code."
+                ),
+                "confidence": 0.85,
+                "recommended_action": "inspect_failing_tests"
+            }
+
+        return {
+            "bug_type": "no_failure_detected",
+            "summary": "Execution completed successfully",
+            "root_cause": "No issues detected",
+            "human_explanation": (
+                "The project ran successfully in a clean environment, "
+                "and no errors were detected."
+            ),
+            "confidence": 0.99,
+            "recommended_action": "none"
+        }
